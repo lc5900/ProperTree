@@ -267,10 +267,7 @@ class PlistWindow(tk.Toplevel):
         self._tree.column("Drag",minwidth=40,width=40,stretch=False,anchor="center")
 
         # Set the close window and copy/paste bindings
-        if str(sys.platform) == "darwin":
-            key = "Command"
-        else:
-            key = "Control"
+        key = "Command" if str(sys.platform) == "darwin" else "Control"
         # Add the window bindings
         self.bind("<{}-w>".format(key), self.close_window)
         self.bind("<{}-f>".format(key), self.hide_show_find)
@@ -309,7 +306,7 @@ class PlistWindow(tk.Toplevel):
         # Setup menu bar (hopefully per-window) - only happens on non-mac systems
         if not str(sys.platform) == "darwin":
             key="Control"
-            sign = "Ctr+"
+            sign = "Ctrl+"
             main_menu = tk.Menu(self)
             file_menu = tk.Menu(self, tearoff=0)
             main_menu.add_cascade(label="File", menu=file_menu)
@@ -1447,6 +1444,7 @@ class PlistWindow(tk.Toplevel):
             clip = self.clipboard_get()
         except:
             clip = ""
+        plist_data = None
         try:
             plist_data = plist.loads(clip,dict_type=dict if self.sort_dict else OrderedDict)
         except:
@@ -1459,7 +1457,7 @@ class PlistWindow(tk.Toplevel):
                 self.bell()
                 mb.showerror("An Error Occurred While Pasting", str(e),parent=self)
                 return 'break'
-        if not plist_data:
+        if plist_data == None:
             if len(clip):
                 # Check if we actually pasted something
                 self.bell()
@@ -1956,11 +1954,10 @@ class PlistWindow(tk.Toplevel):
                                 "values":self._tree.item(x,"values")
                             })
                             values = self.get_padded_values(x,3)
-                            if needed_type.lower == "dictionary":
-                                values[0] = self.menu_code + " Dictionary"
+                            values[0] = self.menu_code + " " + needed_type
+                            if needed_type.lower() == "dictionary":
                                 values[1] = "0 key/value pairs"
                             else:
-                                values[0] = self.menu_code + " Array"
                                 values[1] = "0 children"
                             self._tree.item(x, values=values)
                         else:
@@ -2052,6 +2049,14 @@ class PlistWindow(tk.Toplevel):
             else:
                 popup_menu.add_command(label="New sibling of '{}' (+)".format(self._tree.item(cell,"text")), command=lambda:self.new_row(cell))
                 popup_menu.add_command(label="Remove '{}' (-)".format(self._tree.item(cell,"text")), command=lambda:self.remove_row(cell))
+        # Add the copy and paste options
+        popup_menu.add_separator()
+        sign = "Command" if str(sys.platform) == "darwin" else "Ctrl"
+        c_state = "normal" if len(self._tree.selection()) else "disabled"
+        try: p_state = "normal" if len(self.root.clipboard_get()) else "disabled"
+        except: p_state = "disabled" # Invalid clipboard content
+        popup_menu.add_command(label="Copy ({}+C)".format(sign),command=self.copy_selection,state=c_state)
+        popup_menu.add_command(label="Paste ({}+V)".format(sign),command=self.paste_selection,state=p_state)
         
         # Walk through the menu data if it exists
         cell_path = self.get_cell_path(cell)
