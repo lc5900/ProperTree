@@ -8,7 +8,7 @@ try:
     import tkFileDialog as fd
     import tkMessageBox as mb
     from itertools import izip_longest as izip
-except:
+except ImportError:
     # Python 3
     import tkinter as tk
     import tkinter.ttk as ttk
@@ -17,6 +17,14 @@ except:
     from itertools import zip_longest as izip
 sys.path.append(os.path.abspath(os.path.dirname(os.path.realpath(__file__))))
 import plist
+
+try:
+    long
+    unicode
+except NameError:  # Python 3
+    long = int
+    unicode = str
+
 
 class EntryPopup(tk.Entry):
     def __init__(self, parent, master, text, cell, column, **kw):
@@ -153,7 +161,6 @@ class EntryPopup(tk.Entry):
                         self.bell()
                         if not mb.askyesno("Invalid Key Name","That key name already exists in that dict.\n\nWould you like to keep editing?",parent=self.parent):
                             self.destroy()
-                        # print("Key names must be unique!\a")
                     return
             # Add to undo stack
             self.master.add_undo({"type":"edit","cell":self.cell,"text":self.parent.item(self.cell,"text"),"values":self.parent.item(self.cell,"values")})
@@ -161,8 +168,7 @@ class EntryPopup(tk.Entry):
             self.parent.item(self.cell, text=self.get())
         else:
             # Need to walk the values and pad
-            values = self.parent.item(self.cell)["values"]
-            values = [] if values == "" else values
+            values = self.parent.item(self.cell)["values"] or []
             # Count up, padding as we need
             index = int(self.column.replace("#",""))
             values += [''] * (index - len(values))
@@ -213,30 +219,41 @@ class PlistWindow(tk.Toplevel):
         self.drag_undo = None
         self.clicked_drag = False
         self.data_display = "hex" # hex or base64
-        self.xcode_data = self.controller.xcode_data # keep <data>xxxx</data> in one line when true
-        self.sort_dict = self.controller.sort_dict # Preserve key ordering in dictionaries when loading/saving
+        # self.xcode_data = self.controller.xcode_data # keep <data>xxxx</data> in one line when true
+        # self.sort_dict = self.controller.sort_dict # Preserve key ordering in dictionaries when loading/saving
         self.menu_code = u"\u21D5"
         #self.drag_code = u"\u2630"
         self.drag_code = u"\u2261"
 
         # self = tk.Toplevel(self.root)
+        try:
+            w = int(self.controller.settings.get("last_window_width",640))
+            h = int(self.controller.settings.get("last_window_height",480))
+        except:
+            # wut - who be breakin dis?
+            w = 640
+            h = 480
+        # Save the previous states for comparison
+        self.previous_height = h
+        self.previous_width = w
         self.minsize(width=640,height=480)
         self.protocol("WM_DELETE_WINDOW", self.close_window)
-        w = 640
-        h = 480
         # Let's also center the window
         x = self.winfo_screenwidth() // 2 - w // 2
         y = self.winfo_screenheight() // 2 - h // 2
         self.geometry("{}x{}+{}+{}".format(w,h, x, y))
         # Set the title to "Untitled.plist"
         self.title("Untitled.plist")
+        # Let's track resize events
+        self.bind("<Configure>",lambda event,obj=self: self.window_resize(event,obj))
 
         # Set up the options
         self.current_plist = None # None = new
         self.edited = False
         self.dragging = False
         self.drag_start = None
-        self.show_find_replace = True # Set to the opposite at first so it's hidden when we call hide_show_find
+        self.show_find_replace = False
+        self.show_type = False
         self.type_menu = tk.Menu(self, tearoff=0)
         self.type_menu.add_command(label="Dictionary", command=lambda:self.change_type(self.menu_code + " Dictionary"))
         self.type_menu.add_command(label="Array", command=lambda:self.change_type(self.menu_code + " Array"))
@@ -271,6 +288,7 @@ class PlistWindow(tk.Toplevel):
         # Add the window bindings
         self.bind("<{}-w>".format(key), self.close_window)
         self.bind("<{}-f>".format(key), self.hide_show_find)
+        self.bind("<{}-p>".format(key), self.hide_show_type)
         # Add the treeview bindings
         self._tree.bind("<{}-c>".format(key), self.copy_selection)
         self._tree.bind("<{}-C>".format(key), self.copy_all)
@@ -298,6 +316,7 @@ class PlistWindow(tk.Toplevel):
         self._tree.bind("=", self.new_row)
         self._tree.bind("+", self.new_row)
         self._tree.bind("-", self.remove_row)
+        self._tree.bind("<Delete>", self.remove_row)
         self._tree.bind("<Return>", self.start_editing)
         self._tree.bind("<KP_Enter>", self.start_editing)
         self._tree.bind("<Escape>", self.deselect)
@@ -318,12 +337,15 @@ class PlistWindow(tk.Toplevel):
             file_menu.add_command(label="Reload From Disk ({}L)".format(sign), command=self.reload_from_disk)
             file_menu.add_separator()
             file_menu.add_command(label="OC Snapshot ({}R)".format(sign), command=self.oc_snapshot)
+            file_menu.add_command(label="OC Clean Snapshot ({}Shift+R)".format(sign), command=self.oc_clean_snapshot)
             file_menu.add_separator()
             file_menu.add_command(label="Convert Window ({}T)".format(sign), command=self.controller.show_convert)
             file_menu.add_command(label="Strip Comments ({}M)".format(sign), command=self.strip_comments)
             file_menu.add_separator()
-            file_menu.add_command(label="View Data As Hex", command=lambda:self.change_data_display("hex"))
-            file_menu.add_command(label="View Data As Base64", command=lambda:self.change_data_display("base64"))
+            file_menu.add_command(label="Settings ({},)".format(sign),command=self.controller.show_settings)
+            file_menu.add_separator()
+            file_menu.add_command(label="Toggle Find/Replace Pane ({}F)".format(sign),command=self.hide_show_find)
+            file_menu.add_command(label="Toggle Plist/Data Type Pane ({}P)".format(sign),command=self.hide_show_type)
             if not str(sys.platform) == "darwin":
                 file_menu.add_separator()
                 file_menu.add_command(label="Quit ({}Q)".format(sign), command=self.controller.quit)
@@ -340,6 +362,23 @@ class PlistWindow(tk.Toplevel):
             except:
                 pass
         os.chdir(cwd)
+
+        # Create our type/data view
+        self.display_frame = tk.Frame(self,height=20)
+        self.display_frame.columnconfigure(2,weight=1)
+        self.display_frame.columnconfigure(4,weight=1)
+        pt_label = tk.Label(self.display_frame,text="Plist Type:")
+        dt_label = tk.Label(self.display_frame,text="Display Data as:")
+        self.plist_type_string = tk.StringVar(self.display_frame)
+        self.plist_type_menu = tk.OptionMenu(self.display_frame, self.plist_type_string, "XML","Binary", command=self.change_plist_type)
+        self.plist_type_string.set("XML")
+        self.data_type_string = tk.StringVar(self.display_frame)
+        self.data_type_menu = tk.OptionMenu(self.display_frame, self.data_type_string, "Hex","Base64", command=self.change_data_type)
+        self.data_type_string.set("Hex")
+        pt_label.grid(row=1,column=1,padx=10,pady=(0,5),sticky="w")
+        dt_label.grid(row=1,column=3,padx=10,pady=(0,5),sticky="w")
+        self.plist_type_menu.grid(row=1,column=2,padx=10,pady=10,sticky="we")
+        self.data_type_menu.grid(row=1,column=4,padx=10,pady=10,sticky="we")
         
         # Create our find/replace view
         self.find_frame = tk.Frame(self,height=20)
@@ -382,8 +421,24 @@ class PlistWindow(tk.Toplevel):
         # Add the scroll bars and show the treeview
         vsb.pack(side="right",fill="y")
         self._tree.pack(side="bottom",fill="both",expand=True)
-        self.hide_show_find()
+        self.draw_frames()
         self.entry_popup = None
+
+    def window_resize(self, event=None, obj=None):
+        if not event or not obj: return
+        if self.winfo_height() == self.previous_height and self.winfo_width() == self.previous_width: return
+        self.previous_height = self.winfo_height()
+        self.previous_width = self.winfo_width()
+        self.controller.settings["last_window_width"] = self.previous_width
+        self.controller.settings["last_window_height"] = self.previous_height
+
+    def change_plist_type(self, value):
+        if not self.edited:
+            self.edited = True
+            self.title(self.title()+" - Edited")
+
+    def change_data_type(self, value):
+        self.change_data_display(value.lower())
 
     def change_find_type(self, value):
         self.find_type = value
@@ -443,20 +498,29 @@ class PlistWindow(tk.Toplevel):
             value = "True" if value.lower() == "true" else "False"
         return (True,value)
 
-    def hide_show_find(self, event=None):
-        # Let's find out if we're set to show
+    def draw_frames(self, event=None, changed=None):
         self.find_frame.pack_forget()
+        self.display_frame.pack_forget()
         self._tree_frame.pack_forget()
         if self.show_find_replace:
-            # Need to hide it
-            self._tree_frame.pack(side="bottom",fill="both",expand=True)
-            self._tree.focus_force()
-        else:
-            # Need to show it
+            # Add the show_find pane, make the find pane active, and highlight any text
             self.find_frame.pack(side="top",fill="x",padx=10)
-            self._tree_frame.pack(side="bottom",fill="both",expand=True)
-            self.f_text.focus_force()
+            if changed == "hideshow":
+                self.f_text.focus()
+                self.f_text.selection_range(0, 'end')
+        self._tree_frame.pack(fill="both",expand=True)
+        if self.show_type:
+            self.display_frame.pack(side="bottom",fill="x",padx=10)
+
+    def hide_show_find(self, event=None):
+        # Let's find out if we're set to show
         self.show_find_replace ^= True
+        self.draw_frames(event,"hideshow")
+
+    def hide_show_type(self, event=None):
+        # Let's find out if we're set to show
+        self.show_type ^= True
+        self.draw_frames(event,"showtype")
 
     def do_replace(self, node, find, new_text):
         # We can assume that we have a legit match for whatever is passed
@@ -751,14 +815,14 @@ class PlistWindow(tk.Toplevel):
         # If we got here - we're okay with dumping changes (if any)
         try:
             with open(self.current_plist,"rb") as f:
-                plist_data = plist.load(f,dict_type=dict if self.sort_dict else OrderedDict)
+                plist_data = plist.load(f,dict_type=dict if self.controller.settings.get("sort_dict",False) else OrderedDict)
         except Exception as e:
             # Had an issue, throw up a display box
             self.bell()
             mb.showerror("An Error Occurred While Opening {}".format(os.path.basename(self.current_plist)), str(e),parent=self)
             return
         # We should have the plist data now
-        self.open_plist(self.current_plist,plist_data)
+        self.open_plist(self.current_plist,plist_data, self.plist_type_string.get())
 
     def walk_kexts(self,path,parent=""):
         kexts = []
@@ -782,27 +846,40 @@ class PlistWindow(tk.Toplevel):
                 "BundlePath":parent+"/"+x if len(parent) else x,
                 "ExecutablePath":""
             }
-            # Should be valid-ish - let's check for a binary
-            binpath = os.path.join(kdir,"Contents","MacOS",os.path.splitext(x)[0])
-            if os.path.exists(binpath):
-                kdict["ExecutablePath"] = "Contents/MacOS/"+os.path.splitext(x)[0]
+            kinfo = {}
             # Get the Info.plist
+            plist_rel_path = plist_full_path = None
             if os.path.exists(os.path.join(kdir,"Contents","Info.plist")):
-                kdict["PlistPath"] = "Contents/Info.plist"
+                plist_rel_path  = "Contents/Info.plist"
+                plist_full_path = os.path.join(kdir,"Contents","Info.plist")
             elif os.path.exists(os.path.join(kdir,"Info.plist")):
-                kdict["PlistPath"] = "Info.plist"
-            if not kdict.get("PlistPath"):
-                # We have at least an Info.plist
-                continue
+                plist_rel_path  = "Info.plist"
+                plist_full_path = os.path.join(kdir,"Info.plist")
+            if plist_rel_path == None: continue # Needs *at least* a valid Info.plist
+            kdict["PlistPath"] = plist_rel_path
+            # Let's load the plist and check for other info
+            try:
+                with open(plist_full_path,"rb") as f:
+                    info_plist = plist.load(f)
+                kinfo["CFBundleIdentifier"] = info_plist.get("CFBundleIdentifier",None)
+                kinfo["OSBundleLibraries"] = info_plist.get("OSBundleLibraries",[])
+                if info_plist.get("CFBundleExecutable",None):
+                    if not os.path.exists(os.path.join(kdir,"Contents","MacOS",info_plist["CFBundleExecutable"])):
+                        continue # Requires an executable that doesn't exist - bail
+                    kdict["ExecutablePath"] = "Contents/MacOS/"+info_plist["CFBundleExecutable"]
+            except: continue # Something else broke here - bail
             # Should have something here
-            kexts.append(kdict)
+            kexts.append((kdict,kinfo))
             # Check if we have a PlugIns folder
             pdir = kdir+"/Contents/PlugIns"
             if os.path.exists(pdir) and os.path.isdir(pdir):
                 kexts.extend(self.walk_kexts(pdir,(parent+"/"+x if len(parent) else x)+"/Contents/PlugIns"))
         return kexts
 
-    def oc_snapshot(self, event = None):
+    def oc_clean_snapshot(self, event = None):
+        self.oc_snapshot(event,True)
+
+    def oc_snapshot(self, event = None, clean = False):
         oc_folder = fd.askdirectory(title="Select OC Folder:")
         if not len(oc_folder):
             return
@@ -852,16 +929,20 @@ class PlistWindow(tk.Toplevel):
         if not "Add" in tree_dict["ACPI"] or not isinstance(tree_dict["ACPI"]["Add"],list):
             tree_dict["ACPI"]["Add"] = []
         # Now we walk the existing add values
-        new_acpi = [x for x in os.listdir(oc_acpi) if x.lower().endswith(".aml") and not x.startswith(".")]
-        add = tree_dict["ACPI"]["Add"]
-        for aml in new_acpi:
+        new_acpi = []
+        for path, subdirs, files in os.walk(oc_acpi):
+            for name in files:
+                if not name.startswith(".") and name.lower().endswith(".aml"):
+                    new_acpi.append(os.path.join(path,name)[len(oc_acpi):].replace("\\", "/").lstrip("/"))
+        add = [] if clean else tree_dict["ACPI"]["Add"]
+        for aml in sorted(new_acpi,key=lambda x:x.lower()):
             if aml.lower() in [x.get("Path","").lower() for x in add if isinstance(x,dict)]:
                 # Found it - skip
                 continue
             # Doesn't exist, add it
             add.append({
                 "Enabled":True,
-                "Comment":aml,
+                "Comment":os.path.basename(aml),
                 "Path":aml
             })
         new_add = []
@@ -882,8 +963,8 @@ class PlistWindow(tk.Toplevel):
             tree_dict["UEFI"]["Drivers"] = []
         # Now we walk the existing values
         new_efi = [x for x in os.listdir(oc_drivers) if x.lower().endswith(".efi") and not x.startswith(".")]
-        add = tree_dict["UEFI"]["Drivers"]
-        for efi in new_efi:
+        add = [] if clean else tree_dict["UEFI"]["Drivers"]
+        for efi in sorted(new_efi,key=lambda x:x.lower()):
             if efi.lower() in [x.lower() for x in add]:
                 # Found it - skip
                 continue
@@ -903,8 +984,10 @@ class PlistWindow(tk.Toplevel):
         if not "Add" in tree_dict["Kernel"] or not isinstance(tree_dict["Kernel"]["Add"],list):
             tree_dict["Kernel"]["Add"] = []
         kext_list = self.walk_kexts(oc_kexts)
-        kexts = tree_dict["Kernel"]["Add"]
-        for kext in kext_list:
+        bundle_list = [x[0].get("BundlePath","") for x in kext_list]
+        kexts = [] if clean else tree_dict["Kernel"]["Add"]
+        original_kexts = [x for x in kexts if x.get("BundlePath","") in bundle_list] # get the original load order for comparison purposes - but omit any that no longer exist
+        for kext,info in kext_list:
             if kext["BundlePath"].lower() in [x.get("BundlePath","").lower() for x in kexts if isinstance(x,dict)]:
                 # Already have it, skip
                 continue
@@ -915,16 +998,52 @@ class PlistWindow(tk.Toplevel):
             if not isinstance(kext,dict):
                 # Not a dict - skip it
                 continue
-            if not kext.get("BundlePath","").lower() in [x["BundlePath"].lower() for x in kext_list]:
+            if not kext.get("BundlePath","").lower() in [x[0]["BundlePath"].lower() for x in kext_list]:
                 # Not there, skip it
                 continue
             new_kexts.append(kext)
-        tree_dict["Kernel"]["Add"] = new_kexts
+        # Let's check inheritance via the info
+        # We need to ensure that no 2 kexts consider each other as parents
+        unordered_kexts = []
+        for x in new_kexts:
+            x = next((y for y in kext_list if y[0].get("BundlePath","") == x.get("BundlePath","")),None)
+            if not x: continue
+            parents = [next((z for z in new_kexts if z.get("BundlePath","") == y[0].get("BundlePath","")),[]) for y in kext_list if y[1].get("CFBundleIdentifier",None) in x[1].get("OSBundleLibraries",[])]
+            children = [next((z for z in new_kexts if z.get("BundlePath","") == y[0].get("BundlePath","")),[]) for y in kext_list if x[1].get("CFBundleIdentifier",None) in y[1].get("OSBundleLibraries",[])]
+            parents = [y for y in parents if not y in children and not y.get("BundlePath","") == x[0].get("BundlePath","")]
+            unordered_kexts.append({
+                "kext":x[0],
+                "parents":parents
+            })
+        ordered_kexts = []
+        while len(unordered_kexts): # This could be dangerous if things aren't properly prepared above
+            kext = unordered_kexts.pop(0)
+            if len(kext["parents"]) and not all(x in ordered_kexts for x in kext["parents"]):
+                unordered_kexts.append(kext)
+                continue
+            ordered_kexts.append(next(x for x in new_kexts if x.get("BundlePath","") == kext["kext"].get("BundlePath","")))
+        # Let's compare against the original load order - to prevent mis-prompting
+        missing_kexts = [x for x in ordered_kexts if not x in original_kexts]
+        original_kexts.extend(missing_kexts)
+        # Let's walk both lists and gather all kexts that are in different spots
+        rearranged = []
+        while True:
+            check1 = [x.get("BundlePath","") for x in ordered_kexts if not x.get("BundlePath","") in rearranged]
+            check2 = [x.get("BundlePath","") for x in original_kexts if not x.get("BundlePath","") in rearranged]
+            out_of_place = next((x for x in range(len(check1)) if check1[x] != check2[x]),None)
+            if out_of_place == None: break
+            rearranged.append(check2[out_of_place])
+        # Verify if the load order changed - and prompt the user if need be
+        if len(rearranged):
+            if not mb.askyesno("Incorrect Kext Load Order","Correct the following kext load inheritance issues?\n\n{}".format("\n".join(rearranged)),parent=self):
+                ordered_kexts = original_kexts # We didn't want to update it
+
+        tree_dict["Kernel"]["Add"] = ordered_kexts
 
         # Let's walk the Tools folder if it exists
         if not "Misc" in tree_dict or not isinstance(tree_dict["Misc"],dict):
             tree_dict["Misc"] = {"Tools":[]}
-        if not "Drivers" in tree_dict["Misc"] or not isinstance(tree_dict["Misc"]["Tools"],list):
+        if not "Tools" in tree_dict["Misc"] or not isinstance(tree_dict["Misc"]["Tools"],list):
             tree_dict["Misc"]["Tools"] = []
         if os.path.exists(oc_tools) and os.path.isdir(oc_tools):
             tools_list = []
@@ -935,14 +1054,15 @@ class PlistWindow(tk.Toplevel):
                         # Save it
                         tools_list.append({
                             "Arguments":"",
+                            "Auxiliary":True,
                             "Name":name,
                             "Comment":name,
                             "Enabled":True,
                             "Path":os.path.join(path,name)[len(oc_tools):].replace("\\", "/").lstrip("/") # Strip the /Volumes/EFI/
                         })
-            tools = tree_dict["Misc"]["Tools"]
-            for tool in tools_list:
-                if tool["Path"].lower() in [x.get("Path","").lower() for x in tool if isinstance(x,dict)]:
+            tools = [] if clean else tree_dict["Misc"]["Tools"]
+            for tool in sorted(tools_list, key=lambda x: x.get("Path","").lower()):
+                if tool["Path"].lower() in [x.get("Path","").lower() for x in tools if isinstance(x,dict)]:
                     # Already have it, skip
                     continue
                 # We need it, it seems
@@ -1011,6 +1131,7 @@ class PlistWindow(tk.Toplevel):
             self.clicked_drag = True
 
     def change_data_display(self, new_display = "hex"):
+        self.data_type_string.set(new_display[0].upper()+new_display[1:])
         # This will change how data is displayed - we do this by converting all our existing
         # data values to bytes, then reconverting and displaying appropriately
         if new_display == self.data_display:
@@ -1310,27 +1431,28 @@ class PlistWindow(tk.Toplevel):
             path = fd.asksaveasfilename(
                 title="Please select a file name for saving:",
                 defaultextension=".plist",
-                filetypes=[("Plist files", "*.plist")],
                 initialfile=self.get_title(),
                 initialdir=self.get_dir()
                 )
             if not len(path):
                 # User cancelled - no changes
                 return None
-            if not path.lower().endswith(".plist"):
-                path+=".plist"
         # Should have the save path
         plist_data = self.nodes_to_values()
         # Create a temp folder and save there first
         temp = tempfile.mkdtemp()
         temp_file = os.path.join(temp, os.path.basename(path))
         try:
-            if not self.xcode_data:
+            if self.plist_type_string.get().lower() == "binary":
                 with open(temp_file,"wb") as f:
-                    plist.dump(plist_data,f,sort_keys=self.sort_dict)
+                    plist.dump(plist_data,f,sort_keys=self.controller.settings.get("sort_dict",False),fmt=plist.FMT_BINARY)
+            # elif not self.xcode_data:
+            elif not self.controller.settings.get("xcode_data",True):
+                with open(temp_file,"wb") as f:
+                    plist.dump(plist_data,f,sort_keys=self.controller.settings.get("sort_dict",False))
             else:
                 # Dump to a string first
-                plist_text = plist.dumps(plist_data,sort_keys=self.sort_dict)
+                plist_text = plist.dumps(plist_data,sort_keys=self.controller.settings.get("sort_dict",False))
                 new_plist = []
                 data_tag = ""
                 for x in plist_text.split("\n"):
@@ -1387,8 +1509,9 @@ class PlistWindow(tk.Toplevel):
         self.edited = False
         return True
 
-    def open_plist(self, path, plist_data):
+    def open_plist(self, path, plist_data, plist_type = "XML",auto_expand=True):
         # Opened it correctly - let's load it, and set our values
+        self.plist_type_string.set(plist_type)
         self._tree.delete(*self._tree.get_children())
         self.add_node(plist_data)
         self.current_plist = path
@@ -1400,6 +1523,11 @@ class PlistWindow(tk.Toplevel):
             self.edited = False
         self.undo_stack = []
         self.redo_stack = []
+        # Close if need be
+        if not auto_expand:
+            self.collapse_all()
+        # Ensure the root is expanded at least
+        self._tree.item(self.get_root_node(),open=True)
         self.alternate_colors()
 
     def close_window(self, event=None):
@@ -1411,7 +1539,7 @@ class PlistWindow(tk.Toplevel):
         windows = self.stackorder(self.root)
         if len(windows) == 1 and windows[0] == self:
             # Last and closing
-            self.root.quit()
+            self.controller.close_window(event,True)
         else:
             self.destroy()
         return True
@@ -1422,8 +1550,27 @@ class PlistWindow(tk.Toplevel):
             # Nothing to copy
             return
         try:
-            clipboard_string = plist.dumps(self.nodes_to_values(node,None),sort_keys=self.sort_dict)
+            clipboard_string = plist.dumps(self.nodes_to_values(node,None),sort_keys=self.controller.settings.get("sort_dict",False))
             # Get just the values
+            self.clipboard_clear()
+            self.clipboard_append(clipboard_string)
+        except:
+            pass
+
+    def copy_children(self, event = None):
+        node = self._tree.focus()
+        if node == "":
+            # Nothing to copy
+            return
+        try:
+            plist_data = self.nodes_to_values(node,None)
+            if isinstance(plist_data,dict) and len(plist_data):
+                # Set it to the first key's value
+                plist_data = plist_data[list(plist_data)[0]]
+            elif isinstance(plist_data,list) and len(plist_data):
+                # Set it to the first item of the array
+                plist_data = plist_data[0]
+            clipboard_string = plist.dumps(plist_data,sort_keys=self.controller.settings.get("sort_dict",False))
             self.clipboard_clear()
             self.clipboard_append(clipboard_string)
         except:
@@ -1431,7 +1578,7 @@ class PlistWindow(tk.Toplevel):
 
     def copy_all(self, event = None):
         try:
-            clipboard_string = plist.dumps(self.nodes_to_values(self.get_root_node(),None),sort_keys=self.sort_dict)
+            clipboard_string = plist.dumps(self.nodes_to_values(self.get_root_node(),None),sort_keys=self.controller.settings.get("sort_dict",False))
             # Get just the values
             self.clipboard_clear()
             self.clipboard_append(clipboard_string)
@@ -1446,12 +1593,12 @@ class PlistWindow(tk.Toplevel):
             clip = ""
         plist_data = None
         try:
-            plist_data = plist.loads(clip,dict_type=dict if self.sort_dict else OrderedDict)
+            plist_data = plist.loads(clip,dict_type=dict if self.controller.settings.get("sort_dict",False) else OrderedDict)
         except:
             # May need the header
             cb = self.plist_header + "\n" + clip + "\n" + self.plist_footer
             try:
-                plist_data = plist.loads(cb,dict_type=dict if self.sort_dict else OrderedDict)
+                plist_data = plist.loads(cb,dict_type=dict if self.controller.settings.get("sort_dict",False) else OrderedDict)
             except Exception as e:
                 # Let's throw an error
                 self.bell()
@@ -1473,7 +1620,7 @@ class PlistWindow(tk.Toplevel):
         t = self.get_check_type(node).lower()
         # Convert data to dict first
         if isinstance(plist_data,list): # Convert to a dict to add
-            new_plist = {} if self.sort_dict else OrderedDict()
+            new_plist = {} if self.controller.settings.get("sort_dict",False) else OrderedDict()
             for i,x in enumerate(plist_data):
                 new_plist[str(i)] = x
             plist_data = new_plist
@@ -1483,7 +1630,6 @@ class PlistWindow(tk.Toplevel):
             if node == self.get_root_node() and self.get_root_type() == None:
                 # Update the cell to reflect what's going on
                 add_list.append({"type":"edit","cell":node,"text":self._tree.item(node,"text"),"values":self._tree.item(node,"values")})
-                print(add_list)
                 if self.is_data(plist_data):
                     self._tree.item(node, values=(self.get_type(plist_data),self.get_data(plist_data),"",))
                 elif isinstance(plist_data, datetime.datetime):
@@ -1494,7 +1640,7 @@ class PlistWindow(tk.Toplevel):
                 # I guess we're not - let's force it into a dict to be savage
                 plist_data = {"New item":plist_data}
         if isinstance(plist_data,dict):
-            dict_list = list(plist_data.items()) if not self.sort_dict else sorted(list(plist_data.items()))
+            dict_list = list(plist_data.items()) if not self.controller.settings.get("sort_dict",False) else sorted(list(plist_data.items()))
             for (key,val) in dict_list:
                 if t == "dictionary":
                     # create a unique name
@@ -1551,7 +1697,7 @@ class PlistWindow(tk.Toplevel):
 
         if isinstance(value, dict):
             self._tree.item(i, open=True)
-            dict_list = list(value.items()) if not self.sort_dict else sorted(list(value.items()))
+            dict_list = list(value.items()) if not self.controller.settings.get("sort_dict",False) else sorted(list(value.items()))
             for (key,val) in dict_list:
                 self.add_node(val, i, key)
         elif isinstance(value, (list,tuple)):
@@ -1572,7 +1718,7 @@ class PlistWindow(tk.Toplevel):
         check_type = self.get_check_type(node).lower()
         # Iterate value types
         if check_type == "dictionary":
-            value = {} if self.sort_dict else OrderedDict()
+            value = {} if self.controller.settings.get("sort_dict",False) else OrderedDict()
         elif check_type == "array":
             value = []
         elif check_type == "boolean":
@@ -1620,7 +1766,7 @@ class PlistWindow(tk.Toplevel):
                 parent = self.get_root_type()
             else:
                 # Get the type based on our prefs
-                parent = [] if self.get_check_type(p).lower() == "array" else {} if self.sort_dict else OrderedDict()
+                parent = [] if self.get_check_type(p).lower() == "array" else {} if self.controller.settings.get("sort_dict",False) else OrderedDict()
         name = self._tree.item(node,"text")
         value = self.get_value_from_node(node)
         # At this point, we should have the name and value
@@ -1629,7 +1775,7 @@ class PlistWindow(tk.Toplevel):
         if isinstance(parent,list):
             parent.append(value)
         elif isinstance(parent,dict):
-            if sys.version_info < (3,0) and isinstance(name,unicode):
+            if isinstance(name,unicode):
                 parent[name] = value
             else:
                 parent[str(name)] = value
@@ -1646,9 +1792,9 @@ class PlistWindow(tk.Toplevel):
             return self.menu_code + " Data"
         elif isinstance(value, bool):
             return self.menu_code + " Boolean"
-        elif (sys.version_info >= (3, 0) and isinstance(value, (int,float))) or (sys.version_info < (3,0) and isinstance(value, (int,float,long))):
+        elif isinstance(value, (int,float,long)):
             return self.menu_code + " Number"
-        elif (sys.version_info >= (3, 0) and isinstance(value, str)) or (sys.version_info < (3,0) and isinstance(value, (str,unicode))):
+        elif isinstance(value, (str,unicode)):
             return self.menu_code + " String"
         else:
             return self.menu_code + str(type(value))
@@ -2032,7 +2178,13 @@ class PlistWindow(tk.Toplevel):
             self._tree.focus(cell)
         # Build right click menu
         popup_menu = tk.Menu(self, tearoff=0)
-        # self.popup_menu.add_cascade(label="New", menu=new_menu)
+        if self.get_check_type(cell).lower() in ["array","dictionary"]:
+            popup_menu.add_command(label="Expand Node", command=self.expand_node)
+            popup_menu.add_command(label="Collapse Node", command=self.collapse_node)
+            popup_menu.add_separator()
+            popup_menu.add_command(label="Expand Children", command=self.expand_children)
+            popup_menu.add_command(label="Collapse Children", command=self.collapse_children)
+            popup_menu.add_separator()
         popup_menu.add_command(label="Expand All", command=self.expand_all)
         popup_menu.add_command(label="Collapse All", command=self.collapse_all)
         popup_menu.add_separator()
@@ -2056,6 +2208,8 @@ class PlistWindow(tk.Toplevel):
         try: p_state = "normal" if len(self.root.clipboard_get()) else "disabled"
         except: p_state = "disabled" # Invalid clipboard content
         popup_menu.add_command(label="Copy ({}+C)".format(sign),command=self.copy_selection,state=c_state)
+        if not cell in ("",self.get_root_node()) and self.get_check_type(cell).lower() in ["array","dictionary"]:
+            popup_menu.add_command(label="Copy Children", command=self.copy_children,state=c_state)
         popup_menu.add_command(label="Paste ({}+V)".format(sign),command=self.paste_selection,state=p_state)
         
         # Walk through the menu data if it exists
@@ -2097,6 +2251,16 @@ class PlistWindow(tk.Toplevel):
         finally:
             popup_menu.grab_release()
 
+    def expand_node(self):
+        # Get selected node
+        cell = "" if not len(self._tree.selection()) else self._tree.selection()[0]
+        self._tree.item(cell,open=True)
+
+    def collapse_node(self):
+        # Get selected node
+        cell = "" if not len(self._tree.selection()) else self._tree.selection()[0]
+        self._tree.item(cell,open=False)
+
     def expand_all(self):
         # Get all nodes
         nodes = self.iter_nodes(False)
@@ -2107,6 +2271,24 @@ class PlistWindow(tk.Toplevel):
     def collapse_all(self):
         # Get all nodes
         nodes = self.iter_nodes(False)
+        for node in nodes:
+            self._tree.item(node,open=False)
+        self.alternate_colors()
+
+    def expand_children(self):
+        # Get all children of the selected node
+        cell = "" if not len(self._tree.selection()) else self._tree.selection()[0]
+        nodes = self.iter_nodes(False, cell)
+        nodes.append(cell)
+        for node in nodes:
+            self._tree.item(node,open=True)
+        self.alternate_colors()
+
+    def collapse_children(self):
+        # Get all children of the selected node
+        cell = "" if not len(self._tree.selection()) else self._tree.selection()[0]
+        nodes = self.iter_nodes(False, cell)
+        # nodes.append(cell)
         for node in nodes:
             self._tree.item(node,open=False)
         self.alternate_colors()
@@ -2227,7 +2409,7 @@ class PlistWindow(tk.Toplevel):
         check_type = self.get_check_type(self.get_root_node()).lower()
         # Iterate value types
         if check_type == "dictionary":
-            return {} if self.sort_dict else OrderedDict()
+            return {} if self.controller.settings.get("sort_dict",False) else OrderedDict()
         elif check_type == "array":
             return []
         return None
