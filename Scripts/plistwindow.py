@@ -15,8 +15,7 @@ except ImportError:
     from tkinter import filedialog as fd
     from tkinter import messagebox as mb
     from itertools import zip_longest as izip
-sys.path.append(os.path.abspath(os.path.dirname(os.path.realpath(__file__))))
-import plist
+from . import plist
 
 try:
     long
@@ -301,6 +300,7 @@ class PlistWindow(tk.Toplevel):
         # Bind right click
         if str(sys.platform) == "darwin":
             self._tree.bind("<ButtonRelease-2>", self.popup) # ButtonRelease-2 on mac
+            self._tree.bind("<Control-ButtonRelease-1>", self.popup) # Ctrl+Left Click on mac
         else:
             self._tree.bind("<ButtonRelease-3>", self.popup)
 
